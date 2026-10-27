@@ -39,6 +39,14 @@ struct compare_stack {
 
 #define COMPARE_POLL_PERIOD 1024
 
+/* Same as caml_string_length, kept local so it can be inlined below. */
+static inline mlsize_t compare_string_length(value str)
+{
+  mlsize_t last = Bosize_val(str) - 1;
+  CAMLassert(Byte(str, last - Byte(str, last)) == 0);
+  return last - Byte(str, last);
+}
+
 /* Free the compare stack if needed */
 static void compare_free_stack(struct compare_stack* stk)
 {
@@ -89,6 +97,10 @@ static intnat compare_val(value v1, value v2, int total)
 {
   struct compare_stack stk;
   intnat res;
+  /* Physical identity implies equality for total comparison.  In partial
+     comparison this shortcut is valid only for immediates: a block may hold
+     a NaN or a function. */
+  if (v1 == v2 && (total || Is_long(v1))) return 0;
   stk.stack = stk.init_stack;
   stk.limit = stk.stack + COMPARE_STACK_INIT_SIZE;
   res = do_compare_val(&stk, v1, v2, total);
@@ -210,13 +222,27 @@ static intnat do_compare_val(struct compare_stack* stk,
           continue;
       }
       case String_tag: {
-        mlsize_t len1, len2;
+        mlsize_t len1, len2, len;
         int res;
         if (v1 == v2) break;
-        len1 = caml_string_length(v1);
-        len2 = caml_string_length(v2);
-        res = memcmp(String_val(v1), String_val(v2),
-                     len1 <= len2 ? len1 : len2);
+        len1 = compare_string_length(v1);
+        len2 = compare_string_length(v2);
+        len = len1 <= len2 ? len1 : len2;
+        /* Avoid an out-of-line memcmp for strings occupying at most two
+           words, including their padding byte. */
+        if (len1 < 2 * sizeof(value) && len2 < 2 * sizeof(value)) {
+          const unsigned char *s1 = (const unsigned char *) String_val(v1);
+          const unsigned char *s2 = (const unsigned char *) String_val(v2);
+          res = 0;
+          for (mlsize_t i = 0; i < len; i++) {
+            if (s1[i] != s2[i]) {
+              res = s1[i] < s2[i] ? LESS : GREATER;
+              break;
+            }
+          }
+        } else {
+          res = memcmp(String_val(v1), String_val(v2), len);
+        }
         if (res < 0) return LESS;
         if (res > 0) return GREATER;
         if (len1 != len2) return len1 - len2;

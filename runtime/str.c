@@ -302,13 +302,26 @@ CAMLprim value caml_bytes_notequal(value s1, value s2)
 
 CAMLprim value caml_string_compare(value s1, value s2)
 {
-  mlsize_t len1, len2;
+  mlsize_t len1, len2, len;
   int res;
 
   if (s1 == s2) return Val_int(0);
   len1 = caml_string_length(s1);
   len2 = caml_string_length(s2);
-  res = memcmp(String_val(s1), String_val(s2), len1 <= len2 ? len1 : len2);
+  len = len1 <= len2 ? len1 : len2;
+  if (len < 2 * sizeof(value)) {
+    const unsigned char *p1 = (const unsigned char *) String_val(s1);
+    const unsigned char *p2 = (const unsigned char *) String_val(s2);
+    res = 0;
+    for (mlsize_t i = 0; i < len; i++) {
+      if (p1[i] != p2[i]) {
+        res = p1[i] < p2[i] ? -1 : 1;
+        break;
+      }
+    }
+  } else {
+    res = memcmp(String_val(s1), String_val(s2), len);
+  }
   if (res < 0) return Val_int(-1);
   if (res > 0) return Val_int(1);
   if (len1 < len2) return Val_int(-1);
